@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "portfolio": {
+      "command": "python",
+      "args": ["C:\\Users\\YourName\\portfolio_mcp\\portfolio_server.py"],
+      "env": {
+        "PORTFOLIO_EXCEL_PATH": "C:\\Users\\YourName\\portfolio_mcp\\sample_portfolio.xlsx"
+      }
+    }
+  }
+}

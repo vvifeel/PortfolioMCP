@@ -1,0 +1,11 @@
+[project]
+name = "portfolio-mcp-server"
+version = "0.1.0"
+description = "포트폴리오 DB 자연어 조회 MCP 서버"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.21.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+]
