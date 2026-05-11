@@ -21,7 +21,8 @@ EXCEL_PATH = os.environ.get(
 
 # ── 허용값 상수 ───────────────────────────────────────────────────────
 VALID_METRICS = {
-    "count_companies", "sum_amount", "avg_amount", "avg_equity", "count_rows"
+    "count_companies", "latest_total_amount", "sum_round_amount",
+    "avg_amount", "median_amount", "avg_equity", "count_rows", "count_exited",
 }
 
 VALID_GROUP_BY = {
@@ -33,24 +34,37 @@ VALID_SORT_BY = {
 }
 
 METRIC_ALIASES: dict[str, str] = {
-    "투자금액합계": "sum_amount", "투자금액": "sum_amount",
-    "합계": "sum_amount", "누적투자금액": "sum_amount",
-    "총투자금액": "sum_amount", "투자규모": "sum_amount",
-    "투자건수": "count_rows", "건수": "count_rows", "라운드수": "count_rows",
+    # latest_total_amount (구 sum_amount 포함 — 기업별 최신 누적액 합계)
+    "sum_amount": "latest_total_amount",
+    "투자금액합계": "latest_total_amount", "누적투자금액": "latest_total_amount",
+    "총투자금액": "latest_total_amount", "투자규모": "latest_total_amount",
+    "total_investment": "latest_total_amount", "total_invested": "latest_total_amount",
+    "investment_sum": "latest_total_amount", "amount_sum": "latest_total_amount",
+    # sum_round_amount (기간 내 집행 금액 합계)
+    "기간투자금액": "sum_round_amount", "집행금액합계": "sum_round_amount",
+    "투자금액": "sum_round_amount", "합계": "sum_round_amount",
+    "round_amount_sum": "sum_round_amount", "invested_amount_sum": "sum_round_amount",
+    # avg_amount
     "평균투자금액": "avg_amount", "평균금액": "avg_amount", "평균": "avg_amount",
-    "평균라운드금액": "avg_amount",
-    "평균지분율": "avg_equity", "지분율": "avg_equity",
-    "포트폴리오사수": "count_companies", "회사수": "count_companies", "기업수": "count_companies",
-    "포트폴리오수": "count_companies",
-    "total_investment": "sum_amount", "total_invested": "sum_amount",
-    "investment_sum": "sum_amount", "amount_sum": "sum_amount",
-    "invested_amount_sum": "sum_amount",
+    "평균라운드금액": "avg_amount", "avg_investment": "avg_amount",
+    "avg_invested": "avg_amount", "average_investment": "avg_amount",
+    "avg_round_amount": "avg_amount", "invested_amount_avg": "avg_amount",
+    # median_amount
+    "중앙값": "median_amount", "중앙투자금액": "median_amount",
+    "median_investment": "median_amount", "median_round": "median_amount",
+    # avg_equity
+    "평균지분율": "avg_equity", "지분율": "avg_equity", "avg_equity_rate": "avg_equity",
+    # count_companies
+    "포트폴리오사수": "count_companies", "회사수": "count_companies",
+    "기업수": "count_companies", "포트폴리오수": "count_companies",
     "company_count": "count_companies", "count_company": "count_companies",
     "num_companies": "count_companies",
+    # count_rows
+    "투자건수": "count_rows", "건수": "count_rows", "라운드수": "count_rows",
     "row_count": "count_rows", "investment_count": "count_rows",
-    "avg_investment": "avg_amount", "avg_invested": "avg_amount",
-    "average_investment": "avg_amount", "invested_amount_avg": "avg_amount",
-    "avg_equity_rate": "avg_equity",
+    # count_exited
+    "exit수": "count_exited", "엑싯수": "count_exited", "exit기업수": "count_exited",
+    "num_exited": "count_exited", "exited_count": "count_exited",
 }
 
 GROUP_BY_ALIASES: dict[str, str] = {
@@ -154,11 +168,19 @@ def _build_app_description() -> str:
   - 필드가 다른 조건 간에는 AND 조건 적용
 
 ■ get_statistics metrics 허용값 (영어만, 한국어 사용 금지)
-  count_companies = 포트폴리오사 수
-  sum_amount      = 누적 투자금액 합계
-  avg_amount      = 평균 라운드 투자금액
-  avg_equity      = 평균 지분율 (전환채권 제외)
-  count_rows      = 투자 건수
+  count_companies     = 고유 포트폴리오사 수 (기간 필터 적용)
+  latest_total_amount = 기업별 최신 누적 투자액 합계 ※ 전체 기간 기준, year 필터 무관
+  sum_round_amount    = 기간 내 집행된 라운드 금액 합계 ※ year_from/to 필터와 반드시 함께 사용
+  avg_amount          = 평균 라운드 투자금액 (기간 필터 적용)
+  median_amount       = 라운드 투자금액 중앙값 (기간 필터 적용)
+  avg_equity          = 평균 지분율 (전환채권 제외, 기간 필터 적용)
+  count_rows          = 투자 건수·라운드 수 (기간 필터 적용)
+  count_exited        = Exit 완료 기업 수 ※ 전체 기간 기준
+
+■ metric 선택 기준
+  - 기간 한정 투자 흐름 분석 → sum_round_amount + year_from/year_to 필수
+  - 전체 포트폴리오 규모 파악 → latest_total_amount
+  - 분포 파악 (평균 왜곡 우려 시) → median_amount 병행
 
 ■ get_statistics group_by 허용값
   분야 | 지역 | 투자유형 | 당시 투자 Round 정보 | Exit 여부"""
@@ -360,17 +382,29 @@ def get_statistics(
     sector: str | list[str] | None = None,
     region: str | list[str] | None = None,
     investment_type: str | list[str] | None = None,
+    year_from: int | None = None,
+    year_to: int | None = None,
 ) -> str:
     """
     포트폴리오 통계/집계. Claude가 직접 계산하지 말고 반드시 이 Tool 사용.
 
     Args:
         group_by: 집계 기준. 허용값: 분야 | 지역 | 투자유형 | 당시 투자 Round 정보 | Exit 여부
-        metrics: 집계 방식 목록. 허용값(영어만): count_companies | sum_amount | avg_amount | avg_equity | count_rows
-                 복수 동시 지정 가능. 한국어 절대 사용 금지.
+        metrics: 집계 방식 목록 (복수 지정 가능, 영어만, 한국어 금지).
+                 허용값:
+                   count_companies     = 고유 포트폴리오사 수
+                   latest_total_amount = 기업별 최신 누적 투자액 합계 (전체 기간 기준, year 필터 무관)
+                   sum_round_amount    = 기간 내 집행된 라운드 금액 합계 (year_from/to 필터와 함께 사용)
+                   avg_amount          = 평균 라운드 투자금액
+                   median_amount       = 라운드 투자금액 중앙값
+                   avg_equity          = 평균 지분율 (전환채권 제외)
+                   count_rows          = 투자 건수 (라운드 수)
+                   count_exited        = Exit 완료 기업 수
         sector: 섹터 사전 필터 (OR 지원)
         region: 지역 사전 필터 (OR 지원)
         investment_type: 투자유형 사전 필터 (OR 지원). 예: 지분투자 | 전환채권
+        year_from: 투자 시작 연도 이상 (포함). sum_round_amount 사용 시 필수
+        year_to: 투자 종료 연도 이하 (포함). sum_round_amount 사용 시 필수
     """
     try:
         original_group_by = group_by
@@ -391,7 +425,6 @@ def get_statistics(
             )
         metrics = normalized_metrics
 
-        # 정규화 발생 여부 추적
         normalizations = []
         if original_group_by != group_by:
             normalizations.append(f"group_by: '{original_group_by}' → '{group_by}'")
@@ -399,62 +432,98 @@ def get_statistics(
             if orig != norm:
                 normalizations.append(f"metric: '{orig}' → '{norm}'")
 
-        df = load_data()
+        df_all = load_data()
         applied_filters = {}
 
         if sector:
-            df = apply_list_filter(df, "분야", sector)
+            df_all = apply_list_filter(df_all, "분야", sector)
             applied_filters["분야"] = sector
         if region:
-            df = apply_list_filter(df, "지역", region)
+            df_all = apply_list_filter(df_all, "지역", region)
             applied_filters["지역"] = region
         if investment_type:
-            valid_types = df["투자유형"].dropna().unique().tolist()
+            valid_types = df_all["투자유형"].dropna().unique().tolist()
             types = investment_type if isinstance(investment_type, list) else [investment_type]
             valid_input = [t for t in types if t in valid_types]
             if valid_input:
-                df = apply_list_filter(df, "투자유형", valid_input if len(valid_input) > 1 else valid_input[0])
+                df_all = apply_list_filter(df_all, "투자유형", valid_input if len(valid_input) > 1 else valid_input[0])
                 applied_filters["투자유형"] = valid_input
 
-        if group_by == "Exit 여부":
-            df = df.copy()
-            df["Exit 여부"] = df["Exit 여부"].map({"Y": "Exit 완료", "N": "보유 중"}).fillna(df["Exit 여부"])
+        # 기간 필터: sum_round_amount / avg_amount / median_amount / count_rows / count_companies에 적용
+        df_period = df_all.copy()
+        if year_from is not None:
+            df_period = df_period[df_period["투자년도"] >= year_from]
+            applied_filters["투자년도 from"] = year_from
+        if year_to is not None:
+            df_period = df_period[df_period["투자년도"] <= year_to]
+            applied_filters["투자년도 to"] = year_to
 
-        # latest는 모든 필터 적용 후 계산
-        latest   = df.sort_values(["투자년도", "투자월"]).groupby("기업명").last().reset_index()
-        agg_base = df.groupby(group_by)
+        if group_by == "Exit 여부":
+            df_all = df_all.copy()
+            df_all["Exit 여부"] = df_all["Exit 여부"].map({"Y": "Exit 완료", "N": "보유 중"}).fillna(df_all["Exit 여부"])
+            df_period = df_period.copy()
+            df_period["Exit 여부"] = df_period["Exit 여부"].map({"Y": "Exit 완료", "N": "보유 중"}).fillna(df_period["Exit 여부"])
+
+        # latest_total_amount는 항상 전체 기간 기준 (year 필터 무관)
+        latest_all = df_all.sort_values(["투자년도", "투자월"]).groupby("기업명").last().reset_index()
+
+        agg_period = df_period.groupby(group_by)
+        agg_all    = df_all.groupby(group_by)
         result_rows: dict = {}
+        notes = []
 
         for metric in metrics:
             if metric == "count_companies":
-                for k, v in agg_base["기업명"].nunique().items():
+                # 기간 필터 적용
+                for k, v in agg_period["기업명"].nunique().items():
                     result_rows.setdefault(k, {group_by: k})["포트폴리오사 수"] = int(v)
+
             elif metric == "count_rows":
-                for k, v in agg_base.size().items():
+                for k, v in agg_period.size().items():
                     result_rows.setdefault(k, {group_by: k})["투자 건수"] = int(v)
-            elif metric == "sum_amount":
-                group_map = df[["기업명", group_by]].drop_duplicates("기업명")
-                merged    = latest.merge(group_map, on="기업명", suffixes=("", "_grp"))
+
+            elif metric == "latest_total_amount":
+                # 전체 기간 기준 — year 필터 무관
+                group_map = df_all[["기업명", group_by]].drop_duplicates("기업명")
+                merged    = latest_all.merge(group_map, on="기업명", suffixes=("", "_grp"))
                 target    = group_by + "_grp" if group_by + "_grp" in merged.columns else group_by
                 for k, v in merged.groupby(target)["합계 투자금액(M$)"].sum().round(1).items():
-                    result_rows.setdefault(k, {group_by: k})["총 투자금액(M$)"] = float(v)
+                    result_rows.setdefault(k, {group_by: k})["누적 투자액 합계(M$)"] = float(v)
+                if year_from or year_to:
+                    notes.append("latest_total_amount는 기업별 전체 기간 누적액 기준이므로 year 필터와 무관합니다.")
+
+            elif metric == "sum_round_amount":
+                # 기간 필터 적용된 라운드 금액 합계
+                for k, v in agg_period["당시 투자 Round 금액(M$)"].sum().round(1).items():
+                    result_rows.setdefault(k, {group_by: k})["기간 집행 금액 합계(M$)"] = float(v)
+                if not year_from and not year_to:
+                    notes.append("sum_round_amount: year_from/year_to 미설정으로 전체 기간 집계됩니다.")
+
             elif metric == "avg_amount":
-                for k, v in agg_base["당시 투자 Round 금액(M$)"].mean().round(2).items():
-                    result_rows.setdefault(k, {group_by: k})["평균 라운드 투자금액(M$)"] = float(v)
+                for k, v in agg_period["당시 투자 Round 금액(M$)"].mean().round(2).items():
+                    result_rows.setdefault(k, {group_by: k})["평균 라운드 금액(M$)"] = float(v)
+
+            elif metric == "median_amount":
+                for k, v in agg_period["당시 투자 Round 금액(M$)"].median().round(2).items():
+                    result_rows.setdefault(k, {group_by: k})["라운드 금액 중앙값(M$)"] = float(v)
+
             elif metric == "avg_equity":
-                df_eq = df[df["지분율(%)"] > 0]
+                df_eq = df_period[df_period["지분율(%)"] > 0]
                 for k, v in df_eq.groupby(group_by)["지분율(%)"].mean().round(2).items():
                     result_rows.setdefault(k, {group_by: k})["평균 지분율(%)"] = float(v)
+                notes.append("avg_equity: 전환채권(지분율 0%) 제외 후 계산")
+
+            elif metric == "count_exited":
+                # Exit은 전체 기간 기준
+                exited_df = df_all[df_all["Exit 여부"].isin(["Y", "Exit 완료"])]
+                for k, v in exited_df.groupby(group_by)["기업명"].nunique().items():
+                    result_rows.setdefault(k, {group_by: k})["Exit 완료 기업 수"] = int(v)
 
         rows = sorted(
             result_rows.values(),
             key=lambda x: list(x.values())[1] if len(x) > 1 else 0,
             reverse=True,
         )
-
-        notes = []
-        if "avg_equity" in metrics:
-            notes.append("avg_equity는 전환채권(지분율 0%) 제외 후 계산")
 
         result = {
             "_query_meta": {
